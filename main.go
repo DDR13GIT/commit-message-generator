@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -15,11 +16,15 @@ import (
 )
 
 const usage = `Usage:
-  cmsg        Draft a Conventional Commit message from staged changes
-  cmsg login  Save the Groq API key from GROQ_API_KEY or standard input
+  cmsg            Draft a Conventional Commit message from staged changes
+  cmsg login      Save the Groq API key from GROQ_API_KEY or standard input
+  cmsg --license  Show the license
 
 Press Enter to commit, e to edit in your Git editor, or q to cancel.
 Set GROQ_MODEL to override the default model.`
+
+//go:embed LICENSE
+var license string
 
 func main() {
 	client := &http.Client{
@@ -49,6 +54,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 				return nil
 			case "login":
 				return login(in, out)
+			case "--license":
+				_, err := fmt.Fprint(out, license)
+				return err
 			}
 		}
 		return errors.New("see cmsg -h")
