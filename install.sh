@@ -17,9 +17,13 @@ add_shell_path() {
 }
 
 save_key() {
-  local binary=$1 key
+  local binary=$1 key provider
   if [[ -n ${GROQ_API_KEY:-} ]]; then
     "$binary" login
+    return
+  fi
+  if [[ -n ${OPENROUTER_API_KEY:-} ]]; then
+    "$binary" login openrouter
     return
   fi
   if [[ -t 0 ]]; then
@@ -27,10 +31,11 @@ save_key() {
   elif ! { exec 3</dev/tty; } 2>/dev/null; then
     return
   fi
-  if IFS= read -r -s -u 3 -p 'Groq API key (Enter to keep existing setup): ' key; then
+  if IFS= read -r -s -u 3 -p 'API key (Enter to keep existing setup): ' key; then
     printf '\n' >&2
     if [[ -n "$key" ]]; then
-      printf '%s\n' "$key" | "$binary" login
+      read -r -u 3 -p 'Provider [groq/openrouter] (Enter for Groq): ' provider
+      printf '%s\n' "$key" | "$binary" login "${provider:-groq}"
     fi
   fi
   exec 3<&-

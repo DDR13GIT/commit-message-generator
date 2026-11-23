@@ -8,52 +8,42 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 const usage = `Usage:
-  cmsg            Draft a Conventional Commit message from staged changes
-  cmsg login      Save the Groq API key from GROQ_API_KEY or standard input
-  cmsg --license  Show the license
+  cmsg                          Draft from staged changes
+  cmsg keys                     Open the interactive key manager
+  cmsg keys list
+  cmsg keys add <groq|openrouter> <name>
+  cmsg keys use <name>
+  cmsg keys delete <name>
+  cmsg login [groq|openrouter]  Save and select a default key
+  cmsg --license                Show the license
 
 Press Enter to commit, e to edit in your Git editor, or q to cancel.
-Set GROQ_MODEL to override the default model.`
+Set GROQ_MODEL or OPENROUTER_MODEL to override the provider model.`
 
 //go:embed LICENSE
 var license string
 
-func main() {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr,
-		func(ctx context.Context, key, model, diff string) (string, error) {
-			return generateSubject(ctx, client, key, model, diff)
-		})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cmsg:", err)
-		os.Exit(1)
-	}
-}
-
 func run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer,
-	generate func(context.Context, string, string, string) (string, error),
+	generate func(context.Context, provider, string, string, string) (string, error),
 ) error {
 	if len(args) > 0 {
+		switch args[0] {
+		case "keys":
+			return keysCommand(args[1:], in, out)
+		case "login":
+			return login(args[1:], in, out)
+		}
 		if len(args) == 1 {
 			switch args[0] {
 			case "-h", "--help", "help":
 				fmt.Fprintln(out, usage)
 				return nil
-			case "login":
-				return login(in, out)
 			case "--license":
 				_, err := fmt.Fprint(out, license)
 				return err
@@ -76,21 +66,21 @@ func run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return errors.New("no staged changes. Stage the files you want to commit with git add")
 	}
 
-	key, err := loadKey()
+	p, key, err := activeKey()
 	if err != nil {
 		return err
 	}
-	model := strings.TrimSpace(os.Getenv("GROQ_MODEL"))
+	model := strings.TrimSpace(os.Getenv(p.modelEnv))
 	if model == "" {
-		model = defaultModel
+		model = p.defaultModel
 	}
 	patch := diff.buf.String()
 	if diff.truncated {
-		fmt.Fprintln(errOut, "The staged diff exceeds 48 KiB. Groq will receive the first 48 KiB, starting with the diff stat.")
+		fmt.Fprintf(errOut, "The staged diff exceeds 48 KiB. %s will receive the first 48 KiB, starting with the diff stat.\n", p.label)
 		patch += "\n[Diff truncated]\n"
 	}
-	fmt.Fprintln(errOut, "Drafting a commit message from the staged diff with Groq...")
-	subject, err := generate(ctx, key, model, patch)
+	fmt.Fprintf(errOut, "Drafting a commit message from the staged diff with %s...\n", p.label)
+	subject, err := generate(ctx, p, key, model, patch)
 	if err != nil {
 		return err
 	}

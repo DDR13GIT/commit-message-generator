@@ -28,8 +28,8 @@ func TestCommitFlow(t *testing.T) {
 			t.Setenv("GROQ_API_KEY", "fake-test-token")
 			var output bytes.Buffer
 			err := run(context.Background(), nil, strings.NewReader(tc.input), &output, &output,
-				func(_ context.Context, key, model, diff string) (string, error) {
-					if key != "fake-test-token" || model != defaultModel {
+				func(_ context.Context, p provider, key, model, diff string) (string, error) {
+					if p.id != "groq" || key != "fake-test-token" || model != groq.defaultModel {
 						t.Fatal("unexpected Groq configuration")
 					}
 					if !strings.Contains(diff, "+staged content") || strings.Contains(diff, "unstaged content") {
@@ -60,7 +60,7 @@ func TestBlocksChangedIndex(t *testing.T) {
 	setupRepo(t)
 	t.Setenv("GROQ_API_KEY", "fake-test-token")
 	err := run(context.Background(), nil, strings.NewReader("\n"), io.Discard, io.Discard,
-		func(_ context.Context, key, model, diff string) (string, error) {
+		func(_ context.Context, p provider, key, model, diff string) (string, error) {
 			gitTest(t, "add", "example.txt")
 			return "feat: add example", nil
 		})
@@ -77,11 +77,11 @@ func TestSaveKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := loadKey()
+	_, key, err := activeKey()
 	if err != nil || key != "fake-test-token" {
 		t.Fatalf("stored key lookup failed: %v", err)
 	}
-	path, err := keyPath()
+	path, err := configPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +93,15 @@ func TestSaveKey(t *testing.T) {
 		t.Fatalf("key file permissions = %o", info.Mode().Perm())
 	}
 	t.Setenv("GROQ_API_KEY", "override-token")
-	key, err = loadKey()
-	if err != nil || key != "override-token" {
-		t.Fatalf("environment override failed: %v", err)
+	_, key, err = activeKey()
+	if err != nil || key != "fake-test-token" {
+		t.Fatalf("active saved key override failed: %v", err)
 	}
 }
 
 func TestGroqRequest(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodPost || req.URL.String() != groqEndpoint ||
+		if req.Method != http.MethodPost || req.URL.String() != groq.endpoint ||
 			req.Header.Get("Authorization") != "Bearer fake-test-token" {
 			t.Fatal("unexpected Groq request")
 		}
@@ -119,7 +119,7 @@ func TestGroqRequest(t *testing.T) {
 			`{"choices":[{"message":{"content":"feat(cli): add generator"}}]}`,
 		))}, nil
 	})}
-	subject, err := generateSubject(context.Background(), client, "fake-test-token", "custom-model", "sample diff")
+	subject, err := generateSubject(context.Background(), client, groq, "fake-test-token", "custom-model", "sample diff")
 	if err != nil || subject != "feat(cli): add generator" {
 		t.Fatalf("subject = %q, error = %v", subject, err)
 	}
@@ -131,6 +131,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 
 func setupRepo(t *testing.T) {
 	t.Helper()
+	isolateKeys(t)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Chdir(t.TempDir())
@@ -165,7 +166,7 @@ func TestLargeDiffIsCapped(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "fake-test-token")
 	var warnings bytes.Buffer
 	err := run(context.Background(), nil, strings.NewReader("q\n"), io.Discard, &warnings,
-		func(_ context.Context, key, model, diff string) (string, error) {
+		func(_ context.Context, p provider, key, model, diff string) (string, error) {
 			const marker = "\n[Diff truncated]\n"
 			if len(diff) != 48*1024+len(marker) || !strings.HasSuffix(diff, marker) {
 				t.Fatalf("unexpected patch size %d or missing truncation marker", len(diff))
